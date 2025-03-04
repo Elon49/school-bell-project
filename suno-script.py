@@ -31,8 +31,8 @@ HEADERS = {
 
 # Payload for task creation
 PAYLOAD = {
-  "prompt": "Short Catchy Rington in Hebrew - for ORT Israel - Best Technological School Network in Israel, Happy Purim theme",
-  "style": "Israeli Pop",
+  "prompt": "שיר קצר, עליז, פזמון קליט, קצב גבוה, תופים, טכנו, צלצול לבית הספר אורט הנרי רונסון לכבוד חג פורים השמח",
+  "style": "Israeli Pop, High BPM, Drums, Beat, Techno",
   "title": "ORT ISRAEL",
   "customMode": True,
   "instrumental": False,
