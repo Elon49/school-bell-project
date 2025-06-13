@@ -1,116 +1,115 @@
+import logging
 import requests
 import time
 import sys
 import json
-from dotenv import load_dotenv
 import os
 from datetime import datetime, timedelta
+from typing import Optional
 
-# Load API token from .env
-load_dotenv()
-SUNO_API_TOKEN = os.getenv("SUNO_API_TOKEN")
-if not SUNO_API_TOKEN: 
-    print("Error: 'TOKEN' not found in .env file.")
-    sys.exit(1)
+import config
+from google_ai_script import generate_lyrics
 
-# API endpoints
-CREATE_TASK_URL = "https://apibox.erweima.ai/api/v1/generate"
-STATUS_URL = "https://apibox.erweima.ai/api/v1/generate/record-info?taskId={task_id}"
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-# Check for required command-line argument
-# if len(sys.argv) < 2:
-#     print("Usage: python script.py \"your lyrics here\" [output_file.mp3]")
-#     sys.exit(1)
-
-# Headers for API requests
 HEADERS = {
     "Content-Type": "application/json",
     "Accept": "application/json",
-    "Authorization": f"Bearer {SUNO_API_TOKEN}"
+    "Authorization": f"Bearer {config.SUNO_API_TOKEN}"
 }
 
-# Payload for task creation
-PAYLOAD = {
-  "prompt": "שיר קצר, עליז, פזמון קליט, קצב גבוה, תופים, טכנו, צלצול לבית הספר אורט הנרי רונסון לכבוד חג פורים השמח",
-  "style": "Israeli Pop, High BPM, Drums, Beat, Techno",
-  "title": "ORT ISRAEL",
-  "customMode": True,
-  "instrumental": False,
-  "model": "V4",
-  "callBackUrl": "https://api.example.com/callback" #TODO: change to actual callback url
-}
-# Save the response data
-def save_response_logs(response):
-    if response.status_code == 200:
-        data = response.json()
-        task_id = data["data"]["taskId"]
-        dir_path = task_id
-        if not os.path.exists(dir_path):
-            os.mkdir(dir_path)
-        file_path = os.path.join(dir_path, "status_response.json")
-        with open(file_path, "w") as f:
-            json.dump(data, f, indent=4)
-        print(f"Status response saved to {file_path}")
-    else:
-        print(f"Failed to get status response: {response.status_code}")
 
-# Create audio generation task
-create_response = requests.post(CREATE_TASK_URL, headers=HEADERS, json=PAYLOAD)
-if create_response.status_code != 200:
-    print(f"Task creation failed: {create_response.text}")
-    sys.exit(1)
+def create_task(lyrics: str) -> Optional[str]:
+    payload = {
+        "prompt": lyrics,
+        "style": config.STYLE_PROMPT,
+        "title": config.DEFAULT_TITLE,
+        "customMode": True,
+        "instrumental": False,
+        "model": "V4",
+    }
+    if config.CALLBACK_URL:
+        payload["callBackUrl"] = config.CALLBACK_URL
 
-task_id = create_response.json()["data"]["taskId"]
-print(f"Task ID: {task_id}")
+    try:
+        response = requests.post(config.CREATE_TASK_URL, headers=HEADERS, json=payload)
+        response.raise_for_status()
+        task_id = response.json()["data"]["taskId"]
+        logging.info("Task created: %s", task_id)
+        return task_id
+    except Exception as exc:
+        logging.error("Task creation failed: %s", exc)
+        return None
 
-# Check task status with timeout
-MAX_CHECKS = 5          # Maximum number of status checks
-CHECK_INTERVAL = 60      # Seconds between checks
-TIMEOUT = MAX_CHECKS * CHECK_INTERVAL  # Total timeout in seconds
 
-time.sleep(CHECK_INTERVAL)
-for _ in range(MAX_CHECKS):
-    status_response = requests.get(STATUS_URL.format(task_id=task_id), headers=HEADERS)
-    if status_response.status_code == 200:
-        status = status_response.json()["data"]["status"]
-        if status == "SUCCESS":
-            break
-        elif status == "PENDING" or "SUCCESS" in status:
-            print(f"Status: {status}. Waiting {CHECK_INTERVAL} seconds...")
-            time.sleep(CHECK_INTERVAL)
-        else:
-            print("Task failed. Status: ", status)
-            sys.exit(1) 
-    else:
-        print(f"Status check failed: {status_response.text}")
+def wait_for_task(task_id: str, max_checks: int = 5, interval: int = 60) -> Optional[dict]:
+    for _ in range(max_checks):
+        try:
+            status_resp = requests.get(config.STATUS_URL.format(task_id=task_id), headers=HEADERS)
+            status_resp.raise_for_status()
+            data = status_resp.json()["data"]
+            status = data["status"]
+            if status == "SUCCESS":
+                logging.info("Task succeeded")
+                return data
+            elif status == "PENDING" or "SUCCESS" in status:
+                logging.info("Status: %s. Waiting %s seconds...", status, interval)
+                time.sleep(interval)
+            else:
+                logging.error("Task failed. Status: %s", status)
+                return None
+        except Exception as exc:
+            logging.error("Status check failed: %s", exc)
+            return None
+    logging.error("Timeout waiting for task completion")
+    return None
+
+
+def download_files(data: dict) -> None:
+    tomorrow = datetime.now() + timedelta(days=1)
+    for version, song_data in enumerate(data["response"]["sunoData"], start=1):
+        folder_name = tomorrow.strftime("%d-%m-%y") + f"-{version}"
+        os.makedirs(folder_name, exist_ok=True)
+        audio_url = song_data["audioUrl"]
+        image_url = song_data["imageUrl"]
+        try:
+            audio_resp = requests.get(audio_url)
+            audio_resp.raise_for_status()
+            with open(os.path.join(folder_name, "song.mp3"), "wb") as f:
+                f.write(audio_resp.content)
+            logging.info("Saved audio to %s/song.mp3", folder_name)
+        except Exception as exc:
+            logging.error("Failed to download audio: %s", exc)
+
+        try:
+            image_resp = requests.get(image_url)
+            image_resp.raise_for_status()
+            with open(os.path.join(folder_name, "cover.jpeg"), "wb") as f:
+                f.write(image_resp.content)
+            logging.info("Saved image to %s/cover.jpeg", folder_name)
+        except Exception as exc:
+            logging.error("Failed to download image: %s", exc)
+
+
+def main():
+    lyrics = generate_lyrics()
+    if not lyrics:
+        logging.error("No lyrics generated. Exiting.")
+        return
+
+    task_id = create_task(lyrics)
+    if not task_id:
+        return
+
+    data = wait_for_task(task_id)
+    if not data:
+        return
+
+    download_files(data)
+
+
+if __name__ == "__main__":
+    if not config.SUNO_API_TOKEN:
+        logging.error("SUNO_API_TOKEN not set")
         sys.exit(1)
-else:
-    print(f"Timeout: Task not completed within {TIMEOUT} seconds.")
-    sys.exit(1)
-
-# Create folder name with tomorrow's date and version
-tomorrow = datetime.now() + timedelta(days=1)
-for version in [1, 2]:
-    folder_name = tomorrow.strftime("%d-%m-%y") + f"-{version}"
-    os.makedirs(folder_name, exist_ok=True)
-
-    # Get audio and image URLs for this version
-    song_data = status_response.json()["data"]["response"]["sunoData"][version-1]
-    audio_url = song_data["audioUrl"]
-    image_url = song_data["imageUrl"]
-
-    # Download and save audio file
-    audio_response = requests.get(audio_url)
-    if audio_response.status_code == 200:
-        audio_path = os.path.join(folder_name, "song.mp3")
-        with open(audio_path, "wb") as f:
-            f.write(audio_response.content)
-        print(f"Saved audio to {audio_path}")
-
-    # Download and save image file  
-    image_response = requests.get(image_url)
-    if image_response.status_code == 200:
-        image_path = os.path.join(folder_name, "cover.jpeg")
-        with open(image_path, "wb") as f:
-            f.write(image_response.content)
-        print(f"Saved image to {image_path}")
+    main()
