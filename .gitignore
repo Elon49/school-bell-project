@@ -1,3 +1,14 @@
 .env
 env
-gemini-script.py
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.DS_Store
+.suno-cache/
+*-logs/
+*-cache/
+*.mp3
+*.jpeg
+*.json
+lyrics.txt
