@@ -37,7 +37,7 @@ PAYLOAD = {
   "customMode": True,
   "instrumental": False,
   "model": "V4",
-  "callBackUrl": "https://api.example.com/callback" #TODO: change to actual callback url
+  # No callback URL needed — task status is polled via STATUS_URL
 }
 # Save the response data
 def save_response_logs(response):
